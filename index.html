@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Church Street Chomp</title>
+<meta name="description" content="A maze-chase arcade game: a hungry raccoon, maple candies, and four parking officers on scooters.">
+<meta name="theme-color" content="#120a1c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Chomp">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bungee&family=Rubik:wght@500;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="safeProbe"></div>
+<div id="app">
+  <div id="sky"></div>
+
+  <!-- TITLE -->
+  <section id="title" class="screen">
+    <div class="title-inner">
+      <h1 class="logo" aria-label="Church Street Chomp">
+        <span class="l1">CHURCH STREET</span>
+        <span class="l2">CHOMP</span>
+      </h1>
+      <p class="tagline">A maze-chase arcade game</p>
+      <canvas id="parade" aria-hidden="true"></canvas>
+      <div class="menu">
+        <button id="btnRush" class="big"><span class="bt">RUSH</span><small id="bestRush">5-minute score attack</small></button>
+        <button id="btnClassic" class="big alt"><span class="bt">CLASSIC</span><small id="bestClassic">3 lives, clear every street</small></button>
+        <button id="btnDaily" class="daily"><span class="dt"><b>DAILY PATROL</b><small id="dailyTwist">Today's twist</small></span><span id="dailyStreak" class="streak"></span></button>
+        <div id="goals" class="goals" aria-label="Today's goals"></div>
+        <div class="row">
+          <button id="btnHow" class="pill">Meet the officers</button>
+        </div>
+        <div class="row small">
+          <button class="pill tog" data-set="sfx">Sound: on</button>
+          <button class="pill tog" data-set="music">Music: on</button>
+          <button class="pill tog" data-set="pad">D-pad: off</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- GAME -->
+  <section id="game" class="screen hidden">
+    <div id="marquee" aria-hidden="true"><canvas id="skyCv"></canvas></div>
+    <div id="hud">
+      <button id="btnPause" class="icon" aria-label="Pause"><svg viewBox="0 0 24 24"><rect x="6" y="5" width="4" height="14" rx="1.4"/><rect x="14" y="5" width="4" height="14" rx="1.4"/></svg></button>
+      <div class="hbox"><label>SCORE <i id="mult"></i></label><b id="score">0</b></div>
+      <div class="hbox mid">
+        <label id="hudMode">RUSH</label>
+        <b id="timerBox"><span id="timer">5:00</span></b>
+        <b id="livesBox" class="hidden"><span id="lives"></span></b>
+      </div>
+      <div class="hbox right"><label>BEST</label><b id="best">0</b></div>
+    </div>
+    <div id="stage"><canvas id="board"></canvas></div>
+    <div id="stripWrap"><div id="strip"></div><div id="toast" class="hidden"></div>
+      <div id="tut" class="hidden"><div class="hand"><svg viewBox="0 0 48 48" aria-hidden="true"><path class="trail" d="M6 30 H24"/><path class="fing" d="M27 40c-4-3-8-8-9-11-.6-1.8 1.4-3 2.8-1.8l3.2 3V12.5a2.5 2.5 0 0 1 5 0V24l1-.2a2.5 2.5 0 0 1 3 1.6l.3-.1a2.5 2.5 0 0 1 3.1 1.8 2.5 2.5 0 0 1 3.1 2.2V33c0 4-2 7-4 7z"/></svg></div><p>Swipe to steer<br><small>Swipe early: the turn waits for the next corner</small></p></div>
+    </div>
+    <div id="roster" aria-label="Officers on patrol"></div>
+    <div id="pad" class="hidden" aria-label="Direction pad"><i class="u"></i><i class="l"></i><i class="d"></i><i class="r"></i><b></b></div>
+  </section>
+
+  <!-- PAUSE -->
+  <div id="pause" class="overlay hidden">
+    <div class="panel">
+      <h2>Paused</h2>
+      <button id="pResume" class="big"><span class="bt">Resume</span></button>
+      <div class="row">
+        <button class="pill tog" data-set="sfx">Sound: on</button>
+        <button class="pill tog" data-set="music">Music: on</button>
+      </div>
+      <div class="row">
+        <button class="pill tog" data-set="pad">D-pad: off</button>
+        <button class="pill tog" data-set="haptics">Buzz: on</button>
+      </div>
+      <button id="pRestart" class="pill wide">Restart</button>
+      <button id="pHome" class="pill wide">Home</button>
+    </div>
+  </div>
+
+  <!-- GAME OVER -->
+  <div id="over" class="overlay hidden">
+    <div class="panel">
+      <h2 id="overTitle">TIME'S UP!</h2>
+      <div id="overBest" class="ribbon hidden">NEW BEST!</div>
+      <div id="overScore">0</div>
+      <div id="overBestVal" class="dim">Best: 0</div>
+      <div id="overMedalRow"><span id="overMedal" class="medal"></span><span id="overNext"></span></div>
+      <div id="overGoals" class="hidden"></div>
+      <div id="overBy"><canvas id="overByCv" width="96" height="96"></canvas><span id="overByTxt"></span></div>
+      <div id="overStats"></div>
+      <button id="btnAgain" class="big"><span class="bt">Play again</span></button>
+      <div class="row">
+        <button id="btnSwitch" class="pill">Switch mode</button>
+        <button id="btnOverHome" class="pill">Home</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- HOW / OFFICERS -->
+  <div id="how" class="overlay hidden">
+    <div class="panel wide">
+      <h2>On patrol tonight</h2>
+      <canvas id="howCv"></canvas>
+      <ul class="rules">
+        <li><b>Swipe</b> (or arrow keys) to steer the raccoon. Turn early: it waits for the corner.</li>
+        <li>Munch every <b>maple candy</b>. A <b>maple creemee</b> makes the officers panic. Catch them in a row for a bigger chain.</li>
+        <li><b>Rush:</b> 5 minutes. Clear one side and a treat appears on the other. Grab it to refill the cleared side and speed up. Getting ticketed costs 10 seconds.</li>
+      </ul>
+      <button id="howClose" class="big"><span class="bt">Got it</span></button>
+    </div>
+  </div>
+</div>
+<script src="mazes.js"></script>
+<script src="ai.js"></script>
+<script src="art.js"></script>
+<script src="audio.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
