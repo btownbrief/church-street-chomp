@@ -6,25 +6,32 @@
   const OPP = [2, 3, 0, 1];
 
   /* The four officers. Each one picks a TARGET tile; the officer then drives toward it one junction
-   * at a time. Personality lives entirely in how the target is chosen. */
+   * at a time. Personality lives in how the target is chosen (game.js adds Bolt's dash and Doug's parking). */
   const OFFICERS = [
-    { key: 'chalk', name: 'Chief Chalk', role: 'chases you head-on',
+    { key: 'chalk', name: 'Chief Chalk', role: 'drives straight at you',
       // Straight at the raccoon's tile. Simple, relentless.
       target(c) { return { x: c.px, y: c.py }; } },
-    { key: 'tina', name: 'Ticket Tina', role: 'waits at your next corner',
-      // Heads for the next junction along the raccoon's path, to be there when it arrives.
-      target(c) { return { x: c.aheadX, y: c.aheadY }; } },
-    { key: 'bolt', name: 'Officer Bolt', role: 'guards the treats, then bolts',
-      // Parks by the treat or creemee nearest the raccoon; within 6 tiles he bolts straight at it.
+    { key: 'tina', name: 'Ticket Tina', role: 'cuts you off two corners ahead',
+      // Heads for the SECOND junction along the raccoon's path (or the one after, if Chalk is already there).
+      target(c) { return { x: c.tinaX, y: c.tinaY }; } },
+    { key: 'bolt', name: 'Officer Bolt', role: 'guards treats, dashes down lanes',
+      // Parks by the treat or creemee nearest the raccoon; within 6 tiles he goes straight at it.
+      // In a clear straight line 3-7 tiles away he flashes his headlight and dashes (game.js).
       // With nothing left to guard he tailgates, 3 tiles behind.
       target(c, self) {
+        if (c.dashing) return { x: c.px, y: c.py };
         if (Math.hypot(c.px - self.tx, c.py - self.ty) < 6) return { x: c.px, y: c.py };
         if (c.guardX != null) return { x: c.guardX, y: c.guardY };
         return { x: c.px - DX[c.pdir] * 3, y: c.py - DY[c.pdir] * 3 };
       } },
-    { key: 'doug', name: 'Dozy Doug', role: 'follows your trail, late',
-      // Slow on the uptake: drives to where the raccoon was about 3 seconds ago.
-      target(c) { return { x: c.trailX, y: c.trailY }; } },
+    { key: 'doug', name: 'Dozy Doug', role: 'naps by the candy, wakes up close',
+      // Parks next to the thickest patch of candy on your side; within 5 tiles he wakes and chases
+      // you directly until you are more than 8 tiles away.
+      target(c) {
+        if (c.dougAwake) return { x: c.px, y: c.py };
+        if (c.sentryX != null) return { x: c.sentryX, y: c.sentryY };
+        return { x: c.trailX, y: c.trailY };
+      } },
   ];
 
   // Home corners for scatter time (just outside the board so they circle the nearest block).
@@ -37,7 +44,7 @@
     ];
   }
 
-  /** Target for officer i. ctx: {px,py,pdir,chiefX,chiefY,phase}; self: {tx,ty,corner}. */
+  /** Target for officer i. ctx: {px,py,pdir,phase,...}; self: {tx,ty,corner}. */
   function targetFor(i, ctx, self) {
     if (ctx.phase === 'scatter') return self.corner;
     return OFFICERS[i].target(ctx, self);
@@ -58,13 +65,21 @@
     return best;
   }
 
-  /** Panicked officers dart around: random open exit, still no reversing. */
-  function panicDir(open, tx, ty, dir, rnd) {
+  /** Panicked officers flee: at each junction take the non-reversing exit whose next tile is FARTHEST
+   *  from the raccoon (wrap-aware), with a 20% chance of a random exit so they can still be cornered. */
+  function fleeDir(open, tx, ty, dir, px, py, rnd, cols) {
     const opts = [];
     for (let d = 0; d < 4; d++) if (d !== OPP[dir] && open(tx + DX[d], ty + DY[d])) opts.push(d);
     if (!opts.length) return OPP[dir];
-    return opts[Math.floor(rnd() * opts.length) % opts.length];
+    if (opts.length > 1 && rnd() < 0.2) return opts[Math.floor(rnd() * opts.length) % opts.length];
+    let best = opts[0], bd = -1;
+    for (const d of opts) {
+      let dx = tx + DX[d] - px; if (cols) { if (dx > cols / 2) dx -= cols; else if (dx < -cols / 2) dx += cols; }
+      const dy = ty + DY[d] - py, dd = dx * dx + dy * dy;
+      if (dd > bd + 1e-9) { bd = dd; best = d; }
+    }
+    return best;
   }
 
-  root.CSC_AI = { DX, DY, OPP, OFFICERS, corners, targetFor, chooseDir, panicDir };
+  root.CSC_AI = { DX, DY, OPP, OFFICERS, corners, targetFor, chooseDir, fleeDir };
 })(typeof window !== 'undefined' ? window : globalThis);

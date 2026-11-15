@@ -33,7 +33,7 @@
       <p class="tagline">A maze-chase arcade game</p>
       <canvas id="parade" aria-hidden="true"></canvas>
       <div class="menu">
-        <button id="btnRush" class="big"><span class="bt">RUSH</span><small id="bestRush">5-minute score attack</small></button>
+        <button id="btnRush" class="big"><span class="bt">RUSH</span><small id="bestRush">Beat the clock: catches buy time</small></button>
         <button id="btnClassic" class="big alt"><span class="bt">CLASSIC</span><small id="bestClassic">3 lives, clear every street</small></button>
         <button id="btnDaily" class="daily"><span class="dt"><b>DAILY PATROL</b><small id="dailyTwist">Today's twist</small></span><span id="dailyStreak" class="streak"></span></button>
         <div id="goals" class="goals" aria-label="Today's goals"></div>
@@ -57,7 +57,7 @@
       <div class="hbox"><label>SCORE <i id="mult"></i></label><b id="score">0</b></div>
       <div class="hbox mid">
         <label id="hudMode">RUSH</label>
-        <b id="timerBox"><span id="timer">5:00</span></b>
+        <b id="timerBox"><span id="timer">2:00</span></b><i id="tbonus"></i>
         <b id="livesBox" class="hidden"><span id="lives"></span></b>
       </div>
       <div class="hbox right"><label>BEST</label><b id="best">0</b></div>
@@ -115,7 +115,7 @@
       <ul class="rules">
         <li><b>Swipe</b> (or arrow keys) to steer the raccoon. Turn early: it waits for the corner.</li>
         <li>Munch every <b>maple candy</b>. A <b>maple creemee</b> makes the officers panic. Catch them in a row for a bigger chain.</li>
-        <li><b>Rush:</b> 5 minutes. Clear one side and a treat appears on the other. Grab it to refill the cleared side and speed up. Getting ticketed costs 10 seconds.</li>
+        <li><b>Rush:</b> a 2:00 clock that fights back. Clear one side and a treat appears on the other: grab it to refill that side, speed up and win back 10 s. Every officer you catch adds 2 s. The speed also climbs every 30 s. A ticket costs 10 s and sends that officer back to the office.</li>
       </ul>
       <button id="howClose" class="big"><span class="bt">Got it</span></button>
     </div>

@@ -92,6 +92,7 @@
     honk() { tone(330, .08, 'square', .05, { delay: .25 }); tone(330, .1, 'square', .05, { delay: .37 }); }, // tow truck: beep-beep
     ui() { tone(900, .05, 'triangle', .06, { to: 1200 }); },
     reverse() { tone(300, .05, 'sine', .05, { to: 420 }); },
+    dash() { tone(140, .4, 'sawtooth', .045, { to: 420, atk: .3 }); noise(.4, 700, 1.4, .05, { to: 2600, atk: .3 }); }, // Bolt revs up before a dash
   };
 
   /* ---------- music ---------- */

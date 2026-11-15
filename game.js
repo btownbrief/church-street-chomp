@@ -53,28 +53,49 @@
   /* ---------- tuning ---------- */
   const TUNE = {
     assist: 0.42,        // cornering window (a human-late swipe still lands), in tiles, either side of a junction center
-    bufferMs: 300,       // a swiped turn is held at least this long...
-    bufferJunctions: 1,  // ...and until we've passed this many junctions without using it
+    bufferMs: 450,       // a swiped turn is held at least this long...
+    bufferJunctions: 2,  // ...and until we've passed this many junctions without using it
     bufferMaxMs: 1100,   // hard cap
     hitR: 0.58,          // officer touch distance (tiles) - forgiving
+    hitRearR: 0.42,      // ...and tighter still when you run into the back of an officer driving your way
     nearR: 1.2,          // near-miss distance
-    rushTime: 300,
-    rushPenalty: 10,
+    rushTime: 120,       // Rush starts on a 2:00 clock and can never go above it
+    rushStart: 120,      // the clock a Rush starts on (<= rushTime)
+    rushPenalty: 10,     // a ticket costs a flat 10 s (the officer who wrote it heads back to the office)
+    rushShield: 1.8,     // after a ticket: this long untouchable...
+    rushBackoff: 3.5,    // ...and the officers turn around and head for their corners this long
+    rushFileHome: 5,     // ...and stays in the office this long before coming back out
+    rushSpeedEvery: 30,  // Rush speed climbs one level every 30 s of play, on top of one per refill
+    rushRefillAt: 14,    // the refill treat appears once a side is down to this many candies
+    rushOneCreemee: 3,   // from this speed level (shown as SPEED 4) a refill brings back one creemee on that side, not two
+    boltWind: 0.6,       // Bolt's wind-up before a dash (s): he blinks white and a dashed line shows the lane
+
+    rushRefill: 10,      // a refill treat buys 10 s
+    rushClear: 15,       // clearing the whole board buys 15 s
+    rushCatch: 2,        // every officer caught buys 2 s
+    rushSweep: 5,        // a Clean Sweep buys 5 s more
+    rushLow: 15,         // the timer turns red and ticks under 0:15
+    offBase: 0.78,       // Rush officer speed as a share of yours at speed 1...
+    offStep: 0.02,       // ...plus this much per speed level...
+    offMax: 0.93,        // ...up to this
+    panicBase: 6.0, panicStep: 0.25, panicMin: 3.0, // Rush creemee time: max(min, base - step * L)
+    rushRelease: [0, 1.5, 4, 7], // seconds before each officer leaves the office at the start of a street
     swipePx: 14,
   };
   const SCHED_1 = [['scatter', 8], ['chase', 15], ['scatter', 7], ['chase', 18], ['scatter', 6], ['chase', 22], ['scatter', 4], ['chase', 1e9]];
   const SCHED_N = [['scatter', 5], ['chase', 22], ['scatter', 5], ['chase', 25], ['scatter', 3], ['chase', 30], ['scatter', 2], ['chase', 1e9]];
   /* Officer voices: short speech bubbles at key moments (personality in play, not just on the card). */
   const QUIPS = [
-    { chase: ['HALT!', 'Stop, raccoon!', 'By the book!'], panic: ['Not the creemee!', 'Retreat!'], caught: ['My mustache!', 'Ow, my badge!'], ticket: ['Ticket time.', 'Case closed!'], near: ['Hey!'] },
-    { chase: ["Meter's running!", 'Cutting you off!'], panic: ['Eek!', 'Brain freeze!'], caught: ['My ticket pad!', 'Not fair!'], ticket: ["That's a fine!", 'Pay up!'], near: ['So close!'] },
-    { chase: ['Zoom zoom!', 'Flanking!'], panic: ['Abort! Abort!', 'Nope!'], caught: ['Bzzt!', 'Wheee-ow!'], ticket: ["Boltin' ya!", 'Too slow!'], near: ['Whoa!'] },
-    { chase: ['...huh?', 'On it. Ish.'], panic: ['Coffee break!', 'Uh oh.'], caught: ['zzz...', 'Worth it.'], ticket: ['Oh. Got one.', 'Wasn\'t even trying.'], near: ['Hm?'], doze: ['zzz', 'Five more mins...', '*yawn*'] },
+    { caught: ['My mustache!', 'Ow, my badge!'], ticket: ['Ticket time.', 'Case closed!'] },
+    { caught: ['My ticket pad!', 'Not fair!'], ticket: ["That's a fine!", 'Pay up!'] },
+    { caught: ['Bzzt!', 'Wheee-ow!'], ticket: ["Boltin' ya!", 'Too slow!'] },
+    { caught: ['zzz...', 'Worth it.'], ticket: ['Oh. Got one.', 'Wasn\'t even trying.'] },
   ];
   /* Score medals: something to chase between runs. */
   const MEDALS = {
-    rush: [['Bronze', 15000], ['Silver', 40000], ['Gold', 75000], ['Maple', 120000]],
-    classic: [['Bronze', 3000], ['Silver', 8000], ['Gold', 18000], ['Maple', 35000]],
+    // set to what a thumb can score: Bronze is a decent first few runs, Maple needs a near-perfect one
+    rush: [['Bronze', 6000], ['Silver', 16000], ['Gold', 32000], ['Maple', 65000]],
+    classic: [['Bronze', 2000], ['Silver', 5000], ['Gold', 12000], ['Maple', 25000]],
   };
   function medalFor(mode, score) { let m = -1; MEDALS[mode].forEach((x, i) => { if (score >= x[1]) m = i; }); return m; }
   const CHAIN_COL = ['#ffffff', '#ffe28a', '#ffb15e', '#ff8ad8', '#c9a0ff'];
@@ -84,13 +105,15 @@
     if (G.mode === 'rush') {
       const L = G.speedLvl;
       const tw = G.twist;
-      return { player: Math.min(10.6, 7.4 + 0.34 * L), off: Math.min(9.7, 5.4 + 0.42 * L) * (tw.offMul || 1), panicOff: 4.0 + 0.15 * L,
-        tunnel: 3.6 + 0.12 * L, ret: 16, panicTime: Math.max(2.8, 5.5 - 0.3 * L) * (tw.panicMul || 1) };
+      // the raccoon tops out at speed 7 (still steerable); the officers keep closing the gap after that
+      const player = Math.min(9.4, 7.4 + 0.33 * L);
+      return { player, off: player * Math.min(TUNE.offMax, TUNE.offBase + TUNE.offStep * L) * (tw.offMul || 1), panicOff: 4.0 + 0.15 * L,
+        tunnel: 3.6 + 0.12 * L, ret: 16, panicTime: Math.max(TUNE.panicMin, TUNE.panicBase - TUNE.panicStep * L) * (tw.panicMul || 1) };
     }
     const L = G.level - 1;
     // level 1 is a warm-up: officers clearly slower than you; the ramp starts at level 2
     return { player: Math.min(9.2, 7.2 + 0.26 * L), off: L === 0 ? 4.9 : Math.min(8.9, 5.7 + 0.36 * L), panicOff: 4.0 + 0.1 * L,
-      tunnel: 3.4 + 0.1 * L, ret: 16, panicTime: Math.max(1.6, 6 - 0.6 * L) };
+      tunnel: 3.4 + 0.1 * L, ret: 16, panicTime: Math.max(3.0, 6.0 - 0.5 * L) };
   }
 
   /* ---------- state ---------- */
@@ -161,10 +184,17 @@
     for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) if (G.candy[y][x]) { G.candyLeft++; G.half[halfOf(x)]++; }
   }
   function refillHalf(h) {
+    const cree = []; // missing creemees on this side
     for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) if (halfOf(x) === h && G.maze.candy[y][x] && !G.candy[y][x]) {
+      if (G.maze.candy[y][x] === 2) { cree.push([x, y]); continue; }
       G.candy[y][x] = G.maze.candy[y][x];
       if (G.p && wx(G.p.x) === x && Math.round(G.p.y) === y) G.candy[y][x] = 0;
     }
+    // Sugar Rush stays special late in a run: from SPEED 4 only one creemee comes back (the one farther from you)
+    if (G.p) cree.sort((a, b) => (Math.abs(wdx(b[0], G.p.x)) + Math.abs(b[1] - G.p.y)) - (Math.abs(wdx(a[0], G.p.x)) + Math.abs(a[1] - G.p.y)));
+    cree.slice(0, G.mode === 'rush' && G.speedLvl >= TUNE.rushOneCreemee ? 1 : cree.length).forEach(([x, y]) => {
+      if (!(G.p && wx(G.p.x) === x && Math.round(G.p.y) === y)) G.candy[y][x] = 2;
+    });
     countCandy(); View.candyDirty = true;
   }
 
@@ -172,30 +202,31 @@
     const st = G.maze.start;
     G.p = { x: st.x, y: st.y, dir: [0, 1, 3, 2].find(d => open(st.x + DX[d], st.y + DY[d])), moving: false /* waits for your first swipe */, buf: null, atC: false, chomp: 0, eatT: 9, squash: 0, shield: G.mode === 'rush' && !firstOfLevel ? 2 : 0, dead: 0 };
     const corners = AI.corners(COLS, ROWS);
-    const rel = G.mode === 'rush' ? (firstOfLevel ? [0, 1.5, 4, 7] : [0.6, 2, 4, 6]) : (G.level === 1 ? (firstOfLevel ? [0, 2.5, 14, 26] : [0, 2, 6, 10]) : [0, 0.5, 2, 4]);
+    const rel = G.mode === 'rush' ? (firstOfLevel ? TUNE.rushRelease : [0.6, 2, 4, 6]) : (G.level === 1 ? (firstOfLevel ? [0, 2.5, 14, 26] : [0, 2, 6, 10]) : [0, 0.5, 2, 4]);
     const homes = [9, 9, 8, 10];
     G.offs = [0, 1, 2, 3].map(i => ({
       i, x: i === 0 ? 9 : homes[i], y: i === 0 ? 8 : 10.5, dir: i === 0 ? 1 : (i === 2 ? 0 : 2), face: i === 2 ? 1 : -1,
       st: i === 0 ? 'active' : 'home', release: rel[i], homeX: homes[i], corner: corners[i], panic: false, atC: false,
       target: { x: 9, y: 8 }, lastD: 99, bob: i * 1.3,
+      outT: 0, dash: null, dashCD: 0, awake: false, parked: false, sentry: null, sentryT: 0,
     }));
     G.phaseIdx = 0; G.phaseT = sched()[0][1]; G.panicT = 0; G.chain = 0; G.nearPending = null; G.bubbles = []; G.trail = []; G.bubbleCD = 1.5; G.hist = []; G.histT = 0; G.forceScatter = 0;
     G.offs.forEach(o => { o.quipCD = 4 + o.i * 2; });
     A.music(settings.music ? 'calm' : 'off');
   }
-  const sched = () => (G.mode === 'rush' ? SCHED_RUSH : G.level === 1 ? SCHED_1 : SCHED_N);
+  // Rush: scatter breaks shrink as the speed climbs and vanish from speed 9 (zero-length phases are skipped)
+  const sched = () => (G.mode === 'rush' ? SCHED_RUSH.map(([k, v]) => [k, k === 'scatter' ? v * Math.max(0, 1 - 0.125 * G.speedLvl) : v]) : G.level === 1 ? SCHED_1 : SCHED_N);
   const phase = () => { if (G.forceScatter > 0) return 'scatter'; const s = sched(); return s[Math.min(G.phaseIdx, s.length - 1)][0]; };
 
   let played = false;
   function newGame(mode) {
     G.daily = mode === 'daily'; G.twist = G.daily ? todayTwist() : {}; if (G.daily) mode = 'rush';
-    G.mode = mode; G.score = 0; G.lives = 3; G.level = 1; G.time = TUNE.rushTime; G.speedLvl = 0; G.refills = 0;
+    G.mode = mode; G.score = 0; G.lives = 3; G.level = 1; G.time = TUNE.rushStart; G.playT = 0; G.timeLvl = 0; G.speedLvl = 0; G.refills = 0;
     G.bestChain = 0; G.eatenTotal = 0; G.ticketN = 0; G.caughtN = 0; G.nearN = 0; G.extraGiven = false; G.collected = []; G.clock = 0; G.tickSec = -1;
     G.streak = 0; G.streakT = 9; G.mult = 1; G.maxMult = 1; G.panicBest = 0; G.cleanT = 0; G.cleanBest = 0; G.coachT = 2.5; G.coachPtr = null; G.goalsHit = [];
     G.bubbles = []; G.bubbleCD = 0; G.trail = []; G.sugar = null; G.punch = 0; G.sweeps = 0; G.ticketBy = [0, 0, 0, 0]; G.lastTicketBy = null;
     G.fx = []; G.pops = []; G.flash = 0; G.shake = 0; G.hitPause = 0; G.slowmo = 0; G.nearCD = 0; G.log = [];
     G.rnd = mulberry(G.daily ? dayNum() * 7919 : (Date.now() & 0xffff) || 7);
-    if (G.daily) G.time = 180;
     loadMaze(G.daily ? dayNum() % MAZES.length : 0);
     resetActors(true);
     toReady(played ? 1.0 : 1.9, true); played = true; // replays get going faster
@@ -324,7 +355,10 @@
     if (G.mode === 'rush') {
       G.time -= dt;
       const s = Math.ceil(G.time);
-      if (G.time <= 10 && s !== G.tickSec && s >= 0) { G.tickSec = s; A.sfx.tick(); }
+      if (G.time <= TUNE.rushLow && s !== G.tickSec && s >= 0) { G.tickSec = s; A.sfx.tick(); }
+      // speed climbs with time too, so the first minute isn't flat: one level per 30 s of play, on top of refills
+      G.playT += dt; const tl = Math.floor(G.playT / TUNE.rushSpeedEvery);
+      if (tl > G.timeLvl) { G.speedLvl += tl - G.timeLvl; G.timeLvl = tl; A.setTempo(1 + Math.min(0.5, G.speedLvl * 0.04)); toast('Speed ' + (G.speedLvl + 1), 'Everyone is faster', 1300); }
       if (G.time <= 0) { G.time = 0; G.state = 'timeup'; G.stateT = 1.8; G.banner = { text: "TIME'S UP!", t: 0 }; if (G.panicT > 0) endPanic(); A.music('off'); A.sfx.clear(); buzz(60); return; }
     }
     if (G.panicT > 0) {
@@ -333,10 +367,13 @@
     } else {
       G.phaseT -= dt;
       if (G.phaseT <= 0) {
-        G.phaseIdx++;
-        const s = sched(); if (G.mode === 'rush' && G.phaseIdx >= s.length) G.phaseIdx = 0;
-        G.phaseT = s[Math.min(G.phaseIdx, s.length - 1)][1];
-        if (phase() === 'chase') { const act = G.offs.filter(o => o.st === 'active' && !o.panic); if (act.length) { say(act[Math.floor(G.rnd() * act.length)], 'chase', true); A.sfx.siren(); } }
+        const was = phase();
+        for (let k = 0; k < 9 && G.phaseT <= 0; k++) { // zero-length phases (late Rush scatter) are skipped
+          G.phaseIdx++;
+          const s = sched(); if (G.mode === 'rush' && G.phaseIdx >= s.length) G.phaseIdx = 0;
+          G.phaseT += s[Math.min(G.phaseIdx, s.length - 1)][1];
+        }
+        if (phase() === 'chase' && was !== 'chase' && G.offs.some(o => o.st === 'active' && !o.panic)) A.sfx.siren();
       }
     }
     G.nearCD -= dt; if (G.forceScatter > 0) G.forceScatter -= dt;
@@ -361,7 +398,7 @@
     }
     if (G.nearPending) {
       G.nearPending.t -= dt;
-      if (G.nearPending.t <= 0) { const n = G.nearPending, np = G.twist.nearPts || 50; G.nearPending = null; G.nearN++; addScore(np); pop(n.x, n.y, 'CLOSE ONE! +' + np, '#9fe8ff', 0.85); }
+      if (G.nearPending.t <= 0) { const np = G.twist.nearPts || 50; G.nearPending = null; G.nearN++; addScore(np); toast('Close one! +' + np, null, 1100); } // under the board, not over it
     }
     // the gate lifts while anyone passes through it
     const gateBusy = G.offs.some(o => o.st === 'leave' && o.y < 9.8 || o.st === 'enter');
@@ -421,13 +458,13 @@
   }
   function say(o, kind, force, delay) {
     const q = QUIPS[o.i][kind]; if (!q) return;
-    if (kind === 'chase' || kind === 'near' || kind === 'doze') return; // chatter that covers the corridors was cut: bubbles only for panic, catches and tickets
+    // chatter that covered the corridors was cut: bubbles only for the first catch of a chain and for tickets
     if (!force && G.bubbleCD > 0) return;
     if (!force && G.bubbles.length) return;
     if (kind === 'panic' && G.bubbles.length) return; // one speech bubble on the board at a time
     G.bubbles = G.bubbles.filter(b => false);
-    const b = { i: o.i, text: q[Math.floor(G.rnd() * q.length)], t: -(delay || 0), life: kind === 'ticket' ? 1.6 : 1.35 };
-    if (kind === 'caught' || kind === 'ticket') { b.x = o.x; b.y = o.y; b.below = kind === 'caught'; } // caught: under the score pop
+    const b = { i: o.i, kind, text: q[Math.floor(G.rnd() * q.length)], t: -(delay || 0), life: kind === 'ticket' ? 1.6 : 1.2, wait: 0 };
+    if (kind === 'ticket') { b.x = o.x; b.y = o.y; } // caught: rides along with the tow truck (follows the officer)
     G.bubbles.push(b); G.bubbleCD = 2.4;
   }
   function eatAt(tx, ty, p) {
@@ -444,14 +481,14 @@
           // "heat": +1 per candy, draining 4.5/s, so only long runs through fresh candy climb (x4 takes ~20 s of nonstop eating)
           G.streak = Math.min(90, G.streak + 1); G.streakT = 0;
           const m = G.streak >= 80 ? 4 : G.streak >= 45 ? 3 : G.streak >= 20 ? 2 : 1;
-          if (m > G.mult) { pop(tx, ty - 0.9, 'x' + m + ' STREAK!', ['', '', '#ffd36b', '#ff9a5c', '#ff6fb8'][m], 0.8 + m * .08); A.sfx.streak(m); buzz(10); }
+          if (m > G.mult) { A.sfx.streak(m); buzz(10); } // the HUD badge pulses (nothing on the board)
           G.mult = m; G.maxMult = Math.max(G.maxMult, m); HUD.mult();
         }
         addScore((G.mode === 'rush' ? 10 + G.speedLvl * 2 : 10) * (G.twist.candyMul || 1) * G.mult); A.sfx.munch(G.mult);
         if (G.rnd() < 0.3) burst(tx, ty, 1, ['#ffe9ae'], 'crumb');
       } else {
         addScore(60); startPanic(); burst(tx, ty, 16, ['#fffaf0', '#ffe2a8', '#e9b56a'], 'spark');
-        G.flash = 0.22; G.flashCol = '#fff3d6'; buzz(25);
+        G.flash = 0.22; G.flashCol = '#fff3d6'; buzz(25); G.hitPause = Math.max(G.hitPause, 0.08); // a beat to feel it land
       }
       afterEat();
     }
@@ -469,7 +506,7 @@
       if (G.candyLeft <= 0) levelClear();
     } else {
       if (G.candyLeft <= 0) { boardClear(); return; }
-      for (const h of [0, 1]) if (G.half[h] <= 6 && !G.bonus) spawnRushBonus(h); // nearly clear: no long hunt for strays
+      for (const h of [0, 1]) if (G.half[h] <= TUNE.rushRefillAt && !G.bonus) spawnRushBonus(h); // nearly clear: no long hunt for strays
     }
   }
   function spawnRushBonus(clearedHalf) {
@@ -482,8 +519,7 @@
     const c = cands.length ? cands[Math.floor(G.rnd() * cands.length)] : [other ? 14 : 4, 13];
     const b = Art.BONUS[Math.min(Math.floor(G.refills / 2), Art.BONUS.length - 1)];
     G.bonus = { x: c[0], y: c[1], key: b.key, name: b.name, pts: Math.min(5000, 500 + 250 * G.refills) * (G.twist.bonusMul || 1), life: 1e9, refill: clearedHalf, born: G.clock };
-    pop(c[0], c[1] - 0.8, 'BONUS!', '#fff2a8', 0.9);
-    toast((clearedHalf ? 'Right' : 'Left') + ' side nearly clear!', 'Grab the ' + b.name + ' to refill it');
+    toast((clearedHalf ? 'Right' : 'Left') + ' side nearly clear', 'grab the ' + b.name, 2400); // the pulsing ring marks the treat: no label on the board
     A.sfx.bonus();
   }
   function eatBonus() {
@@ -491,17 +527,17 @@
     addScore(b.pts); pop(b.x, b.y, '+' + b.pts, '#fff2a8', 1.1); A.sfx.bonus(); burst(b.x, b.y, 14, ['#fff2a8', '#ffd36b', '#ffffff'], 'spark'); buzz(20);
     G.collected.push(b.key);
     if (G.mode === 'rush' && b.refill != null) {
-      G.refills++; G.speedLvl++;
+      G.refills++; G.speedLvl++; addTime(TUNE.rushRefill);
       refillHalf(b.refill); A.sfx.refill(); A.setTempo(1 + Math.min(0.5, G.speedLvl * 0.04));
       if (G.refills % 4 === 0) { startSwap('NEW STREET!'); return; }
-      toast('Refill! Speed ' + (G.speedLvl + 1), 'The whole street just got faster');
-      for (const h of [0, 1]) if (G.half[h] <= 6 && !G.bonus) spawnRushBonus(h); // nearly clear: no long hunt for strays
+      toast('Refill! Speed ' + (G.speedLvl + 1), 'everyone is faster');
+      for (const h of [0, 1]) if (G.half[h] <= TUNE.rushRefillAt && !G.bonus) spawnRushBonus(h); // nearly clear: no long hunt for strays
     }
   }
   function boardClear() {
     G.bonus = null;
-    addScore(2000); pop(G.p.x, G.p.y - 1, 'BOARD CLEAR +2000', '#fff2a8', 1.2);
-    G.speedLvl++; G.refills++;
+    addScore(2000); toast('Board clear! +2000', null, 1600);
+    G.speedLvl++; G.refills++; addTime(TUNE.rushClear);
     startSwap('BOARD CLEAR!');
   }
   function startSwap(text) {
@@ -519,15 +555,14 @@
     // SUGAR RUSH: shockwave, zoom punch, callout, and the officers react
     if (G.p) {
       G.sugar = { x: G.p.x, y: G.p.y, t: 0 }; G.punch = 0.32; G.trail = [];
-      // callout away from the raccoon, so it never hides the lanes you're about to choose
-      const act = G.offs.filter(o => o.st === 'active'); act.sort(() => G.rnd() - .5);
-      act.slice(0, 2).forEach((o, k) => say(o, 'panic', true, 0.45 + k * 0.3)); // after the callout has landed
-      if (tip('sugar', 'Sugar Rush!', 'Catch officers in a row: 250, 500, 1000...')) G.coachT = 4;
-      G.bubbleCD = 2.5;
+      // the board itself says "now hunt them" (ice-white officers, ice-blue walls); no speech bubbles
+      G.bubbles = G.bubbles.filter(b => b.kind === 'caught');
+      if (tip('sugar', 'Sugar Rush!', G.mode === 'rush' ? 'catch officers: +2 s each' : 'catch them: 250, 500, 1000...')) G.coachT = 4;
     }
     if (!wasPanic || G.mode === 'classic') G.chain = G.mode === 'rush' && wasPanic ? G.chain : 0;
     for (const o of G.offs) {
-      if (o.st === 'active') { if (!o.panic) o.dir = OPP[o.dir]; o.panic = true; }
+      o.dash = null; o.parked = false;
+      if (o.st === 'active') { if (!o.panic) { o.dir = OPP[o.dir]; o.atC = false; } o.panic = true; }
       else if (o.st === 'home' || o.st === 'leave') o.panic = true;
     }
     A.sfx.creemee(); if (settings.music) A.music('panic');
@@ -545,21 +580,26 @@
       const v = 3.2 * dt;
       if (Math.abs(o.x - 9) > 1e-3) { o.x += Math.sign(9 - o.x) * Math.min(v, Math.abs(9 - o.x)); o.face = Math.sign(9 - o.x) || o.face; }
       else if (Math.abs(o.y - 10.5) > 0.02 && o.y > 10.5) { o.y -= Math.min(v, o.y - 10.5); }
-      else { o.x = 9; o.y -= v; if (o.y <= 8) { o.y = 8; o.st = 'active'; o.dir = 0; o.atC = false; } }
+      else { o.x = 9; o.y -= v; if (o.y <= 8) { o.y = 8; o.st = 'active'; o.dir = 0; o.atC = false; o.outT = 0; o.dash = null; o.awake = false; o.parked = false; o.sentryT = 0; } }
       return;
     }
     if (o.st === 'enter') {
       const v = 7 * dt;
       if (o.y < 10.5) { o.y = Math.min(10.5, o.y + v); }
       else if (Math.abs(o.x - o.homeX) > 1e-3) { o.x += Math.sign(o.homeX - o.x) * Math.min(v, Math.abs(o.homeX - o.x)); }
-      else { o.st = 'home'; o.release = 0.5; o.panic = false; }
+      else { o.st = 'home'; o.release = o.filing ? TUNE.rushFileHome : 0.5; o.panic = false; o.filing = false; }
       return;
     }
+    if (o.st === 'active') { o.outT += dt; officerBrain(o, dt); }
     let v;
     if (o.st === 'back') v = sp.ret;
     else if (inTunnel(o)) v = sp.tunnel;
     else if (o.panic) v = sp.panicOff;
     else v = sp.off;
+    if (o.st === 'active' && !o.panic) {
+      if (o.dash) v *= o.dash.ph === 'wind' ? 0 : o.dash.ph === 'go' ? 1.3 : 0.8; // Bolt: stop + flash, dash, then puff
+      if (o.parked) v = 0; // Doug napping by the candy
+    }
     // Doug and Bolt idle a touch slower; Chalk gets a nudge when few candies remain (classic "hurry")
     if (o.st === 'active' && !o.panic) {
       if (o.i === 0 && G.mode === 'classic' && G.level > 1 && G.candyLeft < 25) v *= 1.06;
@@ -578,18 +618,73 @@
       o.dir = best;
       return true;
     }
-    if (o.panic) { o.dir = AI.panicDir(open, tx, ty, o.dir, G.rnd); o.target = null; return true; }
+    if (o.panic) { const from = o.dir; o.dir = AI.fleeDir(open, tx, ty, o.dir, wx(G.p.x), Math.round(G.p.y), G.rnd, COLS); o.target = null; logDecision(o, tx, ty, 'panic'); G.log.length && G.log[G.log.length - 1].i === o.i && (G.log[G.log.length - 1].from = from); return true; }
     const p = G.p, chief = G.offs[0];
-    const px = wx(p.x), py = Math.round(p.y), ah = aheadJunction(px, py, p.dir), gd = guardSpot(px, py), tr = G.hist[0] || [px, py];
-    const ctx = { px, py, pdir: p.dir, chiefX: wx(chief.x), chiefY: Math.round(chief.y), phase: phase(), aheadX: ah[0], aheadY: ah[1], guardX: gd && gd[0], guardY: gd && gd[1], trailX: tr[0], trailY: tr[1] };
-    o.target = AI.targetFor(o.i, ctx, { tx, ty, corner: o.corner });
-    if (o.i === 3 && ctx.phase === 'chase' && o.quipCD <= 0 && Math.hypot(px - tx, py - ty) > 8) { o.quipCD = 10; say(o, 'doze'); }
-    o.dir = AI.chooseDir(open, tx, ty, o.dir, o.target);
-    if (exits(tx, ty) >= 3) {
-      G.log.push({ t: +G.clock.toFixed(2), i: o.i, phase: ctx.phase, at: [tx, ty], player: [ctx.px, ctx.py, ctx.pdir], chief: [ctx.chiefX, ctx.chiefY], ahead: ah, guard: gd, trail: [tr[0], tr[1]], target: [o.target.x, o.target.y], dir: o.dir });
-      if (G.log.length > 400) G.log.shift();
+    const px = wx(p.x), py = Math.round(p.y), ph = phase();
+    // Bolt: in a clear straight line 3-7 tiles from the raccoon (no other officer between) he stops, blinks white with a dashed line down the lane, then dashes
+    if (o.i === 2 && !o.dash && ph === 'chase' && o.outT >= 2 && o.dashCD <= 0) {
+      const ld = lineOfSight(tx, ty, px, py, o);
+      if (ld >= 0) { o.dash = { ph: 'wind', t: TUNE.boltWind }; o.dir = ld; o.target = { x: px, y: py }; o.dashes = (o.dashes || 0) + 1; A.sfx.dash && A.sfx.dash(); return false; }
     }
+    const tina = tinaSpot(px, py, p.dir, wx(chief.x), Math.round(chief.y)), gd = guardSpot(px, py), tr = G.hist[0] || [px, py];
+    if (o.i === 3 && !o.awake && (!o.sentry || o.sentryT <= 0)) { o.sentry = sentrySpot(px, tx, ty); o.sentryT = 2; }
+    const ctx = { px, py, pdir: p.dir, chiefX: wx(chief.x), chiefY: Math.round(chief.y), phase: ph, tinaX: tina[0], tinaY: tina[1], guardX: gd && gd[0], guardY: gd && gd[1], trailX: tr[0], trailY: tr[1],
+      dashing: !!(o.dash && o.dash.ph === 'go'), dougAwake: o.awake, sentryX: o.sentry && o.sentry[0], sentryY: o.sentry && o.sentry[1] };
+    o.target = AI.targetFor(o.i, ctx, { tx, ty, corner: o.corner });
+    // Doug parks once he reaches his spot (he wakes up when you come within 5 tiles)
+    if (o.i === 3 && ph === 'chase' && !o.awake && o.sentry && tx === o.target.x && ty === o.target.y) { o.parked = true; logDecision(o, tx, ty, ph, ctx, tina, gd, tr); return false; }
+    o.dir = AI.chooseDir(open, tx, ty, o.dir, o.target);
+    logDecision(o, tx, ty, ph, ctx, tina, gd, tr);
     return true;
+  }
+  function logDecision(o, tx, ty, ph, ctx, tina, gd, tr) {
+    if (exits(tx, ty) < 3) return;
+    const e = { t: +G.clock.toFixed(2), i: o.i, phase: ph, at: [tx, ty], dir: o.dir, player: [wx(G.p.x), Math.round(G.p.y), G.p.dir] };
+    if (ctx) Object.assign(e, { chief: [ctx.chiefX, ctx.chiefY], tina, guard: gd, trail: [tr[0], tr[1]], target: [o.target.x, o.target.y], dash: o.dash && o.dash.ph, awake: o.awake, sentry: o.sentry && o.sentry.slice(), parked: o.parked });
+    G.log.push(e);
+    if (G.log.length > 400) G.log.shift();
+  }
+  /* per-tick officer state: Bolt's dash clock, Doug's sentry clock and wake/sleep */
+  function officerBrain(o, dt) {
+    if (o.dashCD > 0) o.dashCD -= dt;
+    if (o.panic) { o.dash = null; o.parked = false; o.awake = false; return; }
+    const ph = phase();
+    if (o.dash) {
+      o.dash.t -= dt;
+      if (ph !== 'chase') { o.dash = null; o.dashCD = 1.5; }
+      else if (o.dash.t <= 0) {
+        if (o.dash.ph === 'wind') o.dash = { ph: 'go', t: 1.2 };
+        else if (o.dash.ph === 'go') { o.dash = { ph: 'tired', t: 3 }; }
+        else { o.dash = null; o.dashCD = 0.5; }
+      }
+    }
+    if (o.i === 3) {
+      o.sentryT -= dt;
+      const d = Math.hypot(wdx(o.x, G.p.x), o.y - G.p.y);
+      if (!o.awake && d < 5 && ph === 'chase') { o.awake = true; if (o.parked) { o.parked = false; o.atC = false; } }
+      else if (o.awake && (d > 8 || ph !== 'chase')) { o.awake = false; o.sentryT = 0; }
+      if (o.parked) {
+        if (ph !== 'chase') { o.parked = false; o.atC = false; }
+        else if (o.sentryT <= 0) { // time to look for a better spot
+          const ns = sentrySpot(wx(G.p.x), wx(o.x), Math.round(o.y)); o.sentryT = 2;
+          if (!ns || ns[0] !== o.sentry[0] || ns[1] !== o.sentry[1]) { o.sentry = ns; o.parked = false; o.atC = false; }
+        }
+      }
+    }
+  }
+  // Bolt's line of sight: same row or column, 3-7 tiles apart, nothing but open floor (and no other officer) between.
+  // Returns the direction or -1.
+  function lineOfSight(tx, ty, px, py, self) {
+    let d = -1, n = 0;
+    if (ty === py && tx !== px) { const dx = px - tx; n = Math.abs(dx); d = dx > 0 ? 3 : 1; }
+    else if (tx === px && ty !== py) { const dy = py - ty; n = Math.abs(dy); d = dy > 0 ? 2 : 0; }
+    if (d < 0 || n < 3 || n > 7) return -1;
+    for (let k = 1; k < n; k++) {
+      const x = wx(tx + DX[d] * k), y = ty + DY[d] * k;
+      if (!open(x, y)) return -1;
+      if (G.offs.some(q => q !== self && q.st === 'active' && wx(q.x) === x && Math.round(q.y) === y)) return -1;
+    }
+    return d;
   }
 
   function runStats(over) {
@@ -614,23 +709,52 @@
     const p = G.p, px = wx(p.x), py = Math.round(p.y);
     if (!tips.creemee && G.panicT <= 0) {
       for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) if (G.candy[y][x] === 2 && Math.abs(x - px) + Math.abs(y - py) <= 6) {
-        if (tip('creemee', 'Maple creemee!', 'Eat it and the officers panic: then chase them')) { G.coachPtr = { x, y, t: 4 }; G.coachT = 4; return; }
+        if (tip('creemee', 'Maple creemee!', 'eat it, then chase them')) { G.coachPtr = { x, y, t: 4 }; G.coachT = 4; return; }
       }
     }
     if (!tips.officer && G.panicT <= 0 && G.offs.some(o => o.st === 'active' && !o.panic && Math.hypot(o.x - p.x, o.y - p.y) < 4)) {
-      if (tip('officer', 'Officers write tickets!', 'Steer away: a touch costs you')) { G.coachT = 4; return; }
+      if (tip('officer', 'Watch the officers', 'a touch is a ticket')) { G.coachT = 4; return; }
     }
-    if (!tips.streak && G.mode === 'rush' && G.mult >= 2) { if (tip('streak', 'Munch streak!', 'Keep munching fresh candy to heat up: x2, x3, x4')) { G.coachT = 4; return; } }
+    if (!tips.streak && G.mode === 'rush' && G.mult >= 2) { if (tip('streak', 'Munch streak!', 'keep munching: x2, x3, x4')) { G.coachT = 4; return; } }
     if (tips.creemee && tips.officer && tips.sugar && tips.streak) { tips.done = 1; store.set('tips', tips); }
   }
-  // Tina: the next junction (3+ exits) along the raccoon's heading, up to 8 tiles out
-  function aheadJunction(px, py, d) {
-    let x = px, y = py;
-    for (let k = 0; k < 8; k++) {
-      const nx = wx(x + DX[d]), ny = y + DY[d]; if (!open(nx, ny)) break;
-      x = nx; y = ny; if (exits(x, y) >= 3) break;
+  // Walk ahead of the raccoon along its corridor (round corners, straight on through junctions) until the
+  // n-th junction (3+ exits) or maxSteps tiles. At a T it takes the branch farther from Chalk: that's the pincer.
+  function walkAhead(px, py, d, n, maxSteps, cx, cy) {
+    let x = px, y = py, dir = d, j = 0;
+    for (let k = 0; k < maxSteps; k++) {
+      if (!open(x + DX[dir], y + DY[dir])) {
+        const alts = [0, 1, 2, 3].filter(e => e !== dir && e !== OPP[dir] && open(x + DX[e], y + DY[e]));
+        if (!alts.length) break;
+        const far = e => Math.abs(wdx(x + DX[e], cx)) + Math.abs(y + DY[e] - cy);
+        dir = alts.length === 1 || far(alts[0]) >= far(alts[1]) ? alts[0] : alts[1];
+      }
+      x = wx(x + DX[dir]); y += DY[dir];
+      if (exits(x, y) >= 3 && ++j >= n) break;
     }
     return [x, y];
+  }
+  // Tina, the cut-off: the SECOND junction ahead of you (max 10 tiles); if Chalk is already within 2 tiles of it, the one after
+  function tinaSpot(px, py, d, cx, cy) {
+    const a = walkAhead(px, py, d, 2, 10, cx, cy);
+    if (Math.abs(wdx(a[0], cx)) + Math.abs(a[1] - cy) <= 2) return walkAhead(px, py, d, 3, 14, cx, cy);
+    return a;
+  }
+  // Doug, the candy sentry: the candy tile on the raccoon's half with the most candies within 3 tiles (ties: nearest to Doug)
+  function sentrySpot(px, dx, dy) {
+    const h = halfOf(px); let best = null, bs = 0, bd = 1e9;
+    for (let pass = 0; pass < 2 && !best; pass++) {
+      for (let y = 1; y < ROWS - 1; y++) for (let x = 0; x < COLS; x++) {
+        if (!G.candy[y][x] || (pass === 0 && halfOf(x) !== h)) continue;
+        let n = 0;
+        for (let yy = Math.max(0, y - 3); yy <= Math.min(ROWS - 1, y + 3); yy++) for (let xx = x - 3; xx <= x + 3; xx++) {
+          const ax = ((xx % COLS) + COLS) % COLS; if (Math.abs(xx - x) + Math.abs(yy - y) <= 3 && G.candy[yy][ax]) n++;
+        }
+        const dd = Math.abs(wdx(x, dx)) + Math.abs(y - dy);
+        if (n > bs || (n === bs && dd < bd)) { bs = n; bd = dd; best = [x, y]; }
+      }
+    }
+    return best;
   }
   // Bolt: the Rush treat if there is one, else the creemee nearest the raccoon
   function guardSpot(px, py) {
@@ -644,7 +768,9 @@
     for (const o of G.offs) {
       if (o.st !== 'active') { o.lastD = 99; continue; }
       const d = Math.hypot(wdx(o.x, p.x), o.y - p.y);
-      if (d < TUNE.hitR) {
+      // running into the back of an officer who is driving your way is forgiven a little more
+      const rear = !o.panic && p.moving && o.dir === p.dir && !o.parked && !(o.dash && o.dash.ph === 'wind') && DX[p.dir] * wdx(o.x, p.x) + DY[p.dir] * (o.y - p.y) > 0;
+      if (d < (rear ? TUNE.hitRearR : TUNE.hitR)) {
         if (o.panic) { catchOfficer(o); continue; }
         if (p.shield > 0 || G.god) continue;
         die(o); return;
@@ -654,7 +780,7 @@
       if (o.nearArm && (o.panic || p.shield > 0 || d > 2.1)) o.nearArm = false;
       else if (o.nearArm && d > o.nearMin + .1 && d > o.lastD && G.nearCD <= 0 && !G.offs.some(q => q !== o && q.st === 'active' && !q.panic && Math.hypot(wdx(q.x, p.x), q.y - p.y) < 1.3)) {
         o.nearArm = false; G.nearCD = 3; G.slowmo = 0.3; A.sfx.nearMiss(); buzz(12);
-        G.nearPending = { t: 0.35, x: p.x, y: p.y - 0.9 }; say(o, 'near', true);
+        G.nearPending = { t: 0.35 };
       }
       o.lastD = d;
     }
@@ -663,39 +789,45 @@
     G.chain++; G.bestChain = Math.max(G.bestChain, G.chain); G.caughtN++; G.panicCatches++; G.panicBest = Math.max(G.panicBest, G.panicCatches);
     const pts = Math.min(G.mode === 'rush' ? 4000 : 2000, 250 * Math.pow(2, G.chain - 1)); // 250, 500, 1000, 2000 (Rush carries the chain on to 4000)
     addScore(pts);
-    o.st = 'back'; o.panic = false; o.atC = false;
-    pop(o.x, o.y - 0.4, String(pts), CHAIN_COL[Math.min(G.chain, CHAIN_COL.length) - 1], 1.0 + Math.min(0.7, G.chain * 0.15), true);
+    o.st = 'back'; o.filing = false; o.panic = false; o.atC = false; o.dash = null; o.parked = false; o.awake = false;
+    G.pops = G.pops.filter(q => !q.catch); // one catch score on the board at a time: the newest
+    pop(o.x, o.y - 0.4, String(pts), CHAIN_COL[Math.min(G.chain, CHAIN_COL.length) - 1], 1.0 + Math.min(0.7, G.chain * 0.15), true); G.pops[G.pops.length - 1].catch = true;
     G.hitPause = 0.22 + Math.min(0.2, G.chain * 0.05); G.flash = 0.08; G.flashCol = '#ffffff'; G.shake = 0.14 + Math.min(0.12, G.chain * 0.03);
-    say(o, 'caught', true);
+    if (G.chain === 1) say(o, 'caught', true, 0.3); // first catch of a chain only: it rides away on the tow truck
+    let secs = TUNE.rushCatch;
     if (G.panicCatches === 4) { // all four in one creemee
-      G.sweeps++; addScore(3000); G.flashCol = '#ffd6f2'; G.flash = 0.18;
-      G.pops.push({ x: 9, y: 5, text: 'CLEAN SWEEP! +3000', col: '#ffe28a', size: 1.15, t: -0.25, life: 1.6 });
+      G.sweeps++; addScore(3000); G.flashCol = '#ffd6f2'; G.flash = 0.18; secs += TUNE.rushSweep;
+      toast('Clean Sweep! +3000', null, 1600);
       setTimeout(() => { if (G.screen === 'game' && !G.paused) A.sfx.life(); }, 250);
     }
-    burst(o.x, o.y, 18, ['#fff7d6', '#ffffff', '#d63a3a', Art.OFF_STYLE[o.i].body], 'paper');
+    addTime(secs);
+    burst(o.x, o.y, 8, ['#fff7d6', '#ffffff', '#d63a3a', Art.OFF_STYLE[o.i].body], 'paper');
     A.sfx.catch(G.chain); A.sfx.honk(); buzz(30);
   }
   function die(o) {
     const p = G.p;
     G.pops = G.pops.filter(q => !/^CLOSE ONE/.test(q.text));
     G.ticketN++; G.state = 'dying'; G.stateT = G.mode === 'rush' ? 1.25 : 1.7; p.dead = 0.001; p.ticketBy = o.i;
-    G.ticketBy[o.i]++; G.lastTicketBy = o.i; G.bubbles = []; say(o, 'ticket', true);
+    G.ticketBy[o.i]++; G.lastTicketBy = o.i; G.bubbles = []; if (G.mode === 'classic') say(o, 'ticket', true); // Rush keeps moving: no quip on the lane
     G.cleanT = 0; G.streak = 0; G.mult = 1; HUD.mult();
     G.shake = 0.35; G.flash = 0.25; G.flashCol = '#ff6b6b'; G.panicT = 0; G.chain = 0; G.nearPending = null;
-    for (const q of G.offs) { q.panic = false; q.nearArm = false; }
+    for (const q of G.offs) { q.panic = false; q.nearArm = false; q.dash = null; q.parked = false; q.awake = false; }
     A.music('off'); A.sfx.caught(); buzz([40, 40, 80]);
-    burst(p.x, p.y, 12, ['#fff7d6', '#d63a3a'], 'paper');
+    burst(p.x, p.y, 6, ['#fff7d6', '#d63a3a'], 'paper');
   }
   function afterDeath() {
     if (G.mode === 'rush') {
+      // a ticket is a flat fine (10 s; 15 s on Sleepy Squad) and a clean reset: no hidden repeat-offender surcharge
       const pen = G.twist.penalty || TUNE.rushPenalty;
-      G.time = Math.max(0, G.time - pen);
+      G.time = Math.max(0, G.time - pen); HUD.timeBonus('-' + pen + 's', true);
       if (G.time <= 0) { G.state = 'timeup'; G.stateT = 1.2; G.banner = { text: "TIME'S UP!", t: 0 }; return; }
       // keep the flow: stay where you are, officers back off, short shield, no READY
-      const p = G.p; p.dead = 0; p.shield = 1.8; p.moving = true; p.buf = null; G.state = 'play'; G.forceScatter = 3.5;
+      const p = G.p; p.dead = 0; p.shield = TUNE.rushShield; p.moving = true; p.buf = null; G.state = 'play'; G.forceScatter = TUNE.rushBackoff;
       for (const o of G.offs) if (o.st === 'active') { o.dir = OPP[o.dir]; o.atC = false; }
+      // the officer who wrote you up drives back to the office to file it (harmless, drawn faded) and comes out again later
+      const w = G.offs[G.lastTicketBy];
+      if (w && w.st === 'active') Object.assign(w, { st: 'back', filing: true, panic: false, atC: false, dash: null, parked: false, awake: false });
       if (settings.music) A.music('calm');
-      pop(G.p.x, G.p.y - 1.2, '-' + pen + 's', '#ff8a8a', 1.1);
     } else {
       G.lives--;
       if (G.lives <= 0) { gameOver(); return; }
@@ -710,6 +842,12 @@
   }
   function nextLevel() {
     G.level++; loadMaze(G.level - 1); resetActors(true); toReady(1.4, false); HUD.full();
+  }
+  // Rush clock: refills, board clears and catches buy time back, never past the 2:00 start
+  function addTime(sec) {
+    if (G.mode !== 'rush' || sec <= 0) return;
+    const before = G.time; G.time = Math.min(TUNE.rushTime, G.time + sec);
+    const got = G.time - before; HUD.timeBonus(got > 0.05 ? '+' + Math.max(1, Math.round(got)) + 's' : 'FULL');
   }
   function addScore(n) {
     G.score += n;
@@ -732,6 +870,8 @@
     }
   }
   function pop(x, y, text, col, size, big) {
+    // at most one pop near the raccoon at a time: a newer one replaces the older
+    if (G.p) { const near = q => Math.abs(wdx(q.x, G.p.x)) < 3 && Math.abs(q.y - G.p.y) < 3; if (near({ x, y })) G.pops = G.pops.filter(q => !near(q)); }
     // stack instead of overlapping when pops land in the same spot (chain catches)
     for (let k = 0; k < 3; k++) if (G.pops.some(q => q.t < .6 && Math.abs(q.x - x) < 2.5 && Math.abs(q.y - y) < 1.2)) y -= 1.2;
     G.pops.push({ x, y, text, col, size: size || 1, t: 0, life: big ? 1.1 : 0.95 });
@@ -740,12 +880,19 @@
     for (const f of G.fx) { f.t += dt; f.x += f.vx * dt; f.y += f.vy * dt; f.vy += (f.kind === 'paper' ? 5 : 2) * dt; f.vx *= Math.pow(0.15, dt); f.rot += f.vr * dt; }
     G.fx = G.fx.filter(f => f.t < f.life);
     for (const q of G.pops) q.t += dt;
-    for (const b of G.bubbles) b.t += dt;
+    for (const b of G.bubbles) {
+      // a towed officer's bubble only shows once the truck is clear of the raccoon (nothing stacks on your lane)
+      // (and once the score pop has gone: one text on the board at a time)
+      const was = b.t; b.t += dt;
+      if (b.kind === 'caught' && was < 0.05 && b.t >= 0 && G.p) { const o = G.offs[b.i]; if (Math.hypot(wdx(o.x, G.p.x), o.y - G.p.y) < 4 || G.pops.some(q => q.t >= 0)) { b.t = -1e-6; b.wait += dt; if (b.wait > 1.6) b.t = b.life; } }
+    }
     G.bubbles = G.bubbles.filter(b => b.t < b.life); if (G.bubbleCD > 0) G.bubbleCD -= dt;
     for (const q of G.trail) q.t += dt;
     G.trail = G.trail.filter(q => q.t < 0.22);
     if (G.sugar) { G.sugar.t += dt; if (G.sugar.t > 0.8) G.sugar = null; }
     if (G.punch > 0) G.punch -= dt;
+    G.iceK = G.iceK || 0; // wall edges ease to ice blue in 0.15 s when a Sugar Rush starts, and back in 0.3 s
+    G.iceK = G.panicT > 0 ? Math.min(1, G.iceK + dt / 0.15) : Math.max(0, G.iceK - dt / 0.3);
     G.pops = G.pops.filter(q => q.t < q.life);
     if (G.flash > 0) G.flash -= dt; if (G.shake > 0) G.shake -= dt;
     if (G.banner) { G.banner.t += dt; if (G.banner.life && G.banner.t > G.banner.life) G.banner = null; }
@@ -797,6 +944,15 @@
       for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) if (G.candy[y][x] === 1) c.drawImage(s, Math.round((x + .5) * T * d - s.width / 2), Math.round((y + .5) * T * d - s.height / 2));
       this.candyDirty = false;
     },
+    // an officer drawn as a solid white silhouette (Bolt's wind-up blink), via a small offscreen canvas
+    drawWhite(c, x, y, T, i, opt) {
+      const d = this.dpr, S = Math.ceil(T * 3), cv = this.whiteCv || (this.whiteCv = document.createElement('canvas'));
+      if (cv.width !== Math.round(S * d)) { cv.width = cv.height = Math.round(S * d); }
+      const k = cv.getContext('2d'); k.setTransform(1, 0, 0, 1, 0, 0); k.clearRect(0, 0, cv.width, cv.height);
+      k.setTransform(d, 0, 0, d, 0, 0); Art.drawOfficer(k, S / 2, S / 2, T, i, opt);
+      k.setTransform(1, 0, 0, 1, 0, 0); k.globalCompositeOperation = 'source-atop'; k.fillStyle = 'rgba(255,255,255,.92)'; k.fillRect(0, 0, cv.width, cv.height); k.globalCompositeOperation = 'source-over';
+      c.drawImage(cv, x - S / 2, y - S / 2, S, S);
+    },
     eraseCandy(x, y) {
       if (!this.candyCv) return; const c = this.candyCv.getContext('2d'), T = this.T, d = this.dpr;
       c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(Math.floor(x * T * d), Math.floor(y * T * d), Math.ceil(T * d) + 1, Math.ceil(T * d) + 1);
@@ -816,6 +972,7 @@
         c.translate(cx, cy); c.scale(z, z); c.translate(-cx, -cy);
       }
       c.drawImage(this.cache.bg, 0, 0, W, H);
+      if (G.iceK > 0.01) { c.globalAlpha = Math.min(1, G.iceK); c.drawImage(this.cache.ice, 0, 0, W, H); c.globalAlpha = 1; } // Sugar Rush: walls go ice blue
       if (G.state === 'clear' || G.state === 'swap') { // walls flash white on a street clear
         const on = Math.floor(t * 8) % 2; c.globalAlpha = on ? .75 : 0; c.drawImage(this.cache.flash, 0, 0, W, H); c.globalAlpha = 1;
       }
@@ -864,15 +1021,32 @@
       const panicLeft = G.panicT;
       for (const o of sorted) {
         let state = 'normal';
-        if (o.st === 'back' || o.st === 'enter') state = 'caught';
-        else if (o.panic) state = panicLeft < 1.8 ? 'flash' : 'panic';
-        if (o.st === 'active' || o.st === 'leave') { // a flat pool of the officer's own colour: threats read as colour blobs
+        if (o.filing && (o.st === 'back' || o.st === 'enter')) state = 'filing'; // wrote you up: drives back faded, harmless
+        else if (o.st === 'back' || o.st === 'enter') state = 'caught';
+        else if (o.panic) { // ice = prey. Last 1.5 s: alternate with their own colour (6/s), last 0.6 s faster (10/s)
+          const rate = panicLeft < 0.6 ? 10 : panicLeft < 1.5 ? 6 : 0;
+          state = rate && Math.floor(t * rate) % 2 ? 'normal' : 'panic';
+        }
+        if ((o.st === 'active' || o.st === 'leave') && state !== 'panic') { // a flat pool of the officer's own colour: threats read as colour blobs
           const gx = (fx(o.x) + .5) * T, gy = (o.y + .5) * T, gr0 = c.createRadialGradient(gx, gy, 0, gx, gy, T * 1.05);
           const gc = Art.OFF_STYLE[o.i].body; // frightened officers stay identifiable by their colour pool
           gr0.addColorStop(0, Art.hexA(gc, .55)); gr0.addColorStop(1, Art.hexA(gc, 0));
           c.fillStyle = gr0; c.beginPath(); c.arc(gx, gy, T * 1.05, 0, TAU); c.fill();
         }
-        if (o.st === 'active' && !o.panic) { // short headlight beam shows which way they're driving
+        const wind = o.dash && o.dash.ph === 'wind';
+        if (wind && o.st === 'active' && !o.panic) { // Bolt winding up: a dashed white line down the lane to where the dash ends
+          const sp0 = speeds(), reach = sp0.off * 1.3 * 1.2, dx = DX[o.dir], dy = DY[o.dir];
+          let n = 0; while (n < reach - 0.5 && open(wx(o.x) + dx * (n + 1), Math.round(o.y) + dy * (n + 1))) n++;
+          const x0 = (o.x + .5 + dx * .7) * T, y0 = (o.y + .5 + dy * .7) * T, x1 = (o.x + .5 + dx * n) * T, y1 = (o.y + .5 + dy * n) * T;
+          if (n >= 1) {
+            c.save(); c.lineCap = 'round'; c.setLineDash([T * .32, T * .22]); c.lineDashOffset = -t * T * 3;
+            c.strokeStyle = 'rgba(10,6,16,.75)'; c.lineWidth = Math.max(3, T * .2); c.beginPath(); c.moveTo(x0, y0); c.lineTo(x1, y1); c.stroke();
+            c.strokeStyle = '#ffffff'; c.lineWidth = Math.max(1.5, T * .1); c.beginPath(); c.moveTo(x0, y0); c.lineTo(x1, y1); c.stroke();
+            c.setLineDash([]); c.lineWidth = Math.max(1.5, T * .1); c.beginPath(); // end tick across the lane
+            c.moveTo(x1 - dy * T * .32, y1 - dx * T * .32); c.lineTo(x1 + dy * T * .32, y1 + dx * T * .32); c.stroke(); c.restore();
+          }
+        }
+        if (o.st === 'active' && !o.panic && !o.parked && !wind) { // short headlight beam shows which way they're driving
           const hx = (o.x + .5) * T, hy = (o.y + .5) * T, dx = DX[o.dir], dy = DY[o.dir], L = T * 1.5, Wd = T * .4;
           const gr = c.createLinearGradient(hx, hy, hx + dx * L, hy + dy * L);
           const col = Art.OFF_STYLE[o.i].body;
@@ -883,7 +1057,14 @@
           c.lineTo(hx + dx * T * .3 + dy * T * .12, hy + dy * T * .3 - dx * T * .12); c.closePath(); c.fill(); c.restore();
         }
         const look = o.target && o.st === 'active' && !o.panic ? { x: Math.sign(o.target.x - o.x) * .8, y: Math.sign(o.target.y - o.y) * .8 } : { x: DX[o.dir], y: DY[o.dir] };
-        drawWrapped(o.x, x => Art.drawOfficer(c, (x + .5) * T, (o.y + .5) * T - T * .12, T, o.i, { dir: o.dir, face: o.face, t: t + o.i, state, lookX: look.x, lookY: look.y, scale: 1.18 }));
+        const scared = state === 'panic', jx = scared ? Math.sin(t * 53 + o.i * 2) : 0, jy = scared ? Math.cos(t * 41 + o.i) : 0; // a 1 px nervous jitter
+        const blinkW = wind && Math.floor(t * 16) % 2 === 0; // wind-up: the whole sprite blinks white, 8 times a second
+        if (state === 'filing') { c.save(); c.globalAlpha = .3; }
+        drawWrapped(o.x, x => {
+          const ax = (x + .5) * T + jx, ay = (o.y + .5) * T - T * .12 + jy, opt = { dir: o.dir, face: o.face, t: t + o.i, state: state === 'filing' ? 'normal' : state, lookX: look.x, lookY: look.y, scale: scared ? 1.06 : 1.18 };
+          if (blinkW) this.drawWhite(c, ax, ay, T, o.i, opt); else Art.drawOfficer(c, ax, ay, T, o.i, opt);
+        });
+        if (state === 'filing') c.restore();
       }
       const p = G.p;
       const drawMarker = (x) => { // bright ring + facing arrow: the raccoon is always the easiest thing on the board to find
@@ -956,7 +1137,7 @@
         c.font = '400 ' + Math.round(T * .66 * q.size * sc) + 'px Bungee, Impact, sans-serif';
         let hw = c.measureText(q.text).width / 2 + 4, px = Math.min(W - ox - hw, Math.max(ox + hw, (q.x + .5) * T)), py = Math.min(H - oy - T * .8, Math.max(oy + T * .6, (q.y + .5) * T - k * T * 1.2));
         if (p) { const rx = (fx(p.x) + .5) * T, ry = (p.y + .5) * T; // never sit on the raccoon: slide to the roomier side
-          if (Math.abs(px - rx) < hw + T * .7 && Math.abs(py - ry) < T * 1.1) { const dn = ry + T * 1.5, up = ry - T * 1.5; py = dn < H - oy - T * .8 && (up < oy + T * .6 || ry < H / 2) ? dn : up; py = Math.min(H - oy - T * .8, Math.max(oy + T * .6, py)); } }
+          if (Math.abs(px - rx) < hw + T * .7 && Math.abs(py - ry) < T * 2) { const dn = ry + T * 2.2, up = ry - T * 2.2; /* keep 2+ tiles clear of you */ py = dn < H - oy - T * .8 && (up < oy + T * .6 || ry < H / 2) ? dn : up; py = Math.min(H - oy - T * .8, Math.max(oy + T * .6, py)); } }
         c.lineWidth = Math.max(3, T * .2); c.strokeStyle = 'rgba(20,8,24,.9)'; c.strokeText(q.text, px, py);
         c.fillStyle = q.col; c.fillText(q.text, px, py);
       }
@@ -983,13 +1164,6 @@
         c.restore();
       }
       if (p && (G.pops.length || G.bubbles.length)) drawRac(); // nothing is ever drawn over the raccoon
-      // chain counter
-      if (G.chain >= 2 && G.panicT > 0) {
-        const s = 1 + Math.min(.6, G.chain * .12);
-        c.font = '400 ' + Math.round(T * .62 * s) + 'px Bungee, Impact, sans-serif';
-        c.lineWidth = 4; c.strokeStyle = 'rgba(20,8,24,.9)'; const cyc = p && p.y < ROWS / 2 ? H - oy - T * 1.1 : oy + T * 1.1; c.strokeText('CHAIN x' + G.chain, W / 2, cyc);
-        c.fillStyle = '#ff8ad8'; c.fillText('CHAIN x' + G.chain, W / 2, cyc);
-      }
       c.restore();
       // slow-mo vignette
       if (G.slowmo > 0) {
@@ -999,7 +1173,7 @@
       }
       if (G.panicT > 0) { // melting creemee timer: a thin pink bar along the bottom frame
         const f = Math.max(0, G.panicT / G.panicMax), bw = VW * .7, bx = ox + (VW - bw) / 2, bh = Math.max(5, T * .26), by = H - oy - bh / 2 - 1.5;
-        const blink = G.panicT < 1.8 && Math.floor(t * 8) % 2;
+        const blink = G.panicT < 1.5 && Math.floor(t * (G.panicT < 0.6 ? 10 : 6)) % 2;
         c.fillStyle = 'rgba(12,6,20,.9)'; c.beginPath(); if (c.roundRect) c.roundRect(bx - 2, by - bh / 2 - 2, bw + 4, bh + 4, bh); else c.rect(bx - 2, by - bh / 2 - 2, bw + 4, bh + 4); c.fill();
         const gr = c.createLinearGradient(bx, 0, bx + bw, 0); gr.addColorStop(0, '#ff8ad8'); gr.addColorStop(1, '#fff0c8');
         c.fillStyle = blink ? '#ffffff' : gr; c.beginPath(); if (c.roundRect) c.roundRect(bx, by - bh / 2, Math.max(bh, bw * f), bh, bh / 2); else c.rect(bx, by - bh / 2, bw * f, bh); c.fill();
@@ -1066,7 +1240,9 @@
       c.fillStyle = '#ffcf7a'; c.fillRect(sx - 2, base - h * .45, 4, 6);
       for (const [rx, ry, rw] of roofs) for (let wx2 = rx + 5; wx2 < rx + rw - 6; wx2 += 9) for (let wy = ry + 5; wy < base - 4; wy += 9) if (R() < .32) { c.fillStyle = R() < .5 ? 'rgba(255,200,110,.85)' : 'rgba(255,170,90,.6)'; c.fillRect(wx2, wy, 4, 5); }
       // string lights across the top of the street
-      const cols = ['#ffd36b', '#ff8ad8', '#8fe6ff', '#9dff9a'];
+      // dim warm-white bulbs (coloured ones fought the officers' colours)
+      c.save(); c.globalAlpha = 0.4;
+      const cols = ['#fff1d6', '#fff1d6', '#fff1d6', '#fff1d6'];
       for (let row = 0; row < 2; row++) {
         const y0 = h * (.08 + row * .12), sag = h * (.2 + row * .06);
         c.strokeStyle = 'rgba(20,10,20,.8)'; c.lineWidth = 1; c.beginPath();
@@ -1075,6 +1251,7 @@
           const g = c.createRadialGradient(u * w, yy, 0, u * w, yy, 7); g.addColorStop(0, Art.hexA(col, .7)); g.addColorStop(1, Art.hexA(col, 0)); c.fillStyle = g; c.fillRect(u * w - 7, yy - 7, 14, 14);
           c.fillStyle = col; c.beginPath(); c.arc(u * w, yy, 1.8, 0, TAU); c.fill(); }
       }
+      c.restore();
       } // end of the code-drawn backdrop
       // the street sign
       const name = G.maze.name.toUpperCase(); let fs = Math.max(12, Math.min(20, h * .19));
@@ -1093,17 +1270,14 @@
     shown: false, built: false, last: [], t: 0,
     build() {
       const el = $('roster'); el.innerHTML = '';
-      AI.OFFICERS.forEach((o, i) => { const d = document.createElement('div'); d.className = 'ro'; d.innerHTML = '<canvas width="64" height="64"></canvas><div><b>' + ['Chalk', 'Tina', 'Bolt', 'Doug'][i] + '</b><span></span></div>'; d.title = o.name; el.appendChild(d); });
+      AI.OFFICERS.forEach((o, i) => { const d = document.createElement('div'); d.className = 'ro'; d.innerHTML = '<canvas width="64" height="64"></canvas><b>' + ['Chalk', 'Tina', 'Bolt', 'Doug'][i] + '</b>'; d.title = o.name + ': ' + o.role; el.appendChild(d); });
       this.built = true; this.last = [];
     },
+    // no status words (nobody reads them mid-run): lit = out on the street, dim = office or towed, ice = panicked
     status(o) {
-      if (o.st === 'back' || o.st === 'enter') return ['towed', 'Towed!', 'caught'];
-      if (o.st === 'home') return ['home', 'Office', 'normal'];
-      if (o.st === 'leave') return ['home', 'Out!', 'normal'];
-      if (o.panic) return ['panic', 'Panic!', 'panic'];
-      if (o.i === 2 && phase() === 'chase' && o.target && G.p && Math.hypot(o.target.x - G.p.x, o.target.y - G.p.y) > 2.5) return ['doze', 'Guarding', 'normal'];
-      if (o.i === 3 && phase() === 'chase') return ['doze', 'Trailing', 'normal'];
-      return phase() === 'chase' ? ['chase', 'Chasing', 'normal'] : ['scatter', 'Patrol', 'normal'];
+      if (o.panic && o.st === 'active') return ['panic', '', 'panic'];
+      if (o.st === 'active') return ['out', '', 'normal'];
+      return ['dim', '', 'normal'];
     },
     update(dt, force) {
       if (!this.shown || !G.offs.length) return;
@@ -1113,7 +1287,7 @@
       G.offs.forEach((o, i) => {
         const [cls, txt, look] = this.status(o), key = cls + txt + look;
         if (this.last[i] === key && !force) return; this.last[i] = key;
-        const cell = cells[i]; cell.className = 'ro s-' + cls; cell.querySelector('span').textContent = txt;
+        const cell = cells[i]; cell.className = 'ro s-' + cls; void txt;
         const cv = cell.querySelector('canvas'), c = cv.getContext('2d'); c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, 64, 64);
         Art.drawOfficer(c, 32, look === 'caught' ? 36 : 34, look === 'caught' ? 34 : 40, i, { dir: 3, face: 1, t: i, lookX: 1, state: look });
       });
@@ -1133,6 +1307,11 @@
       const el = $('mult'), m = G.mult > 1 ? 'x' + G.mult : '';
       if (el.textContent !== m) { el.textContent = m; el.className = 'm' + G.mult; if (m) { void el.offsetWidth; el.classList.add('bump'); } }
     },
+    // clock changes show beside the HUD timer, never on the board
+    timeBonus(txt, bad) {
+      const el = $('tbonus'); if (!el) return;
+      el.textContent = txt; el.className = bad ? 'bad' : ''; void el.offsetWidth; el.classList.add('show');
+    },
     lifeIcon() {
       if (this.lifeUrl) return this.lifeUrl;
       const c = document.createElement('canvas'); c.width = c.height = 56; const x = c.getContext('2d');
@@ -1140,7 +1319,7 @@
     },
     full() {
       this.score();
-      $('hudMode').textContent = G.daily ? 'DAILY' : G.mode === 'rush' ? 'RUSH' : 'LEVEL ' + G.level;
+      $('hudMode').textContent = (G.daily ? 'DAILY' : G.mode === 'rush' ? 'RUSH' : 'LEVEL ' + G.level) + (G.mode === 'rush' ? ' \u00b7 SPEED ' + (G.speedLvl + 1) : '');
       $('timerBox').classList.toggle('hidden', G.mode !== 'rush');
       $('livesBox').classList.toggle('hidden', G.mode !== 'classic');
       if (G.mode === 'classic') {
@@ -1153,7 +1332,7 @@
     frame() {
       if (G.mode === 'rush') {
         const s = Math.max(0, Math.ceil(G.time)); const txt = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
-        this.set('timer', txt); $('timerBox').classList.toggle('low', G.time <= 10 && G.screen === 'game');
+        this.set('timer', txt); $('timerBox').classList.toggle('low', G.time <= TUNE.rushLow && G.screen === 'game');
       }
       this.strip(false);
       Roster.update(1 / 60, false);
@@ -1166,6 +1345,7 @@
         const bs = el.querySelectorAll('.half b');
         if (bs.length === 2) { bs[0].style.width = pct(0); bs[1].style.width = pct(1); }
         if (this.last.stripSpeed === G.speedLvl && this.last.stripMaze === G.mazeIdx) return;
+        $('hudMode').textContent = (G.daily ? 'DAILY' : 'RUSH') + ' \u00b7 SPEED ' + (G.speedLvl + 1);
       }
       if (G.mode === 'classic' && !force) {
         const key = G.candyLeft + '/' + G.collected.length;
@@ -1174,11 +1354,9 @@
       this.last.stripSpeed = G.speedLvl; this.last.stripMaze = G.mazeIdx;
       if (G.mode === 'rush') {
         const bar = h => '<span class="half"><b style="width:' + pct(h) + '"></b></span>';
-        el.innerHTML = '<div class="sl"><span class="lbl">Left</span>' + bar(0) + '<span class="lbl">Right</span>' + bar(1) + '</div>' +
-          '<div class="sl"><span class="lbl">Speed</span><span class="pips">' + Array.from({ length: 8 }, (_, k) => '<i class="' + (k <= G.speedLvl ? 'on' : '') + '"></i>').join('') + '</span><span class="street">' + G.maze.name + '</span></div>';
+        el.innerHTML = '<div class="sl"><span class="lbl">Left</span>' + bar(0) + '<span class="lbl">Right</span>' + bar(1) + '</div>';
       } else {
-        el.innerHTML = '<div class="sl"><span class="street">' + G.maze.name + '</span><span class="got">' + G.collected.slice(-7).map(k => '<i class="b-' + k + '"></i>').join('') + '</span></div>' +
-          '<div class="sl dim">Candies left: ' + G.candyLeft + '</div>';
+        el.innerHTML = '<div class="sl"><span class="lbl">Candies left ' + G.candyLeft + '</span><span class="got">' + G.collected.slice(-7).map(k => '<i class="b-' + k + '"></i>').join('') + '</span></div>';
       }
     },
   };
@@ -1304,10 +1482,10 @@
   const TitleUI = {
     refresh() {
       const tag = md => { const m = medalFor(md, best[md]); return m >= 0 ? ' · ' + MEDALS[md][m][0] : ''; };
-      $('bestRush').textContent = best.rush ? 'Best ' + best.rush.toLocaleString() + tag('rush') : '5-minute score attack';
+      $('bestRush').textContent = best.rush ? 'Best ' + best.rush.toLocaleString() + tag('rush') : 'Beat the clock: catches buy time';
       $('bestClassic').textContent = best.classic ? 'Best ' + best.classic.toLocaleString() + tag('classic') : '3 lives, clear every street';
       const tw = todayTwist(), db = dailyBest();
-      $('dailyTwist').textContent = "Today: " + tw.name + (db ? ' · best ' + db.toLocaleString() : ' · 3 min');
+      $('dailyTwist').textContent = "Today: " + tw.name + (db ? ' · best ' + db.toLocaleString() : ' · 2:00 clock');
       const done = goalDone(), gl = goalsToday();
       $('goals').innerHTML = '<h3>TODAY\'S GOALS <span>' + gl.filter(g => done.includes(g.id)).length + '/3</span></h3>' +
         gl.map(g => '<div class="goal' + (done.includes(g.id) ? ' done' : '') + '"><i>' + (done.includes(g.id) ? '\u2713' : '') + '</i><span>' + g.text + '</span></div>').join('');
@@ -1391,7 +1569,7 @@
     const s = safe();
     const land = orient === 'land' && W > 700;
     document.body.classList.toggle('land', land);
-    const hudH = land ? 0 : 64, stripH = land ? 0 : 54;
+    const hudH = land ? 0 : 64, stripH = land ? 0 : 46;
     let padH = settings.pad ? Math.min(210, Math.max(150, H * .22)) : 0;
     let availW = W - s.l - s.r - 4, availH = H - s.t - s.b - hudH - stripH - padH - 12;
     if (land) { availW = W - s.l - s.r - 190 - 18 - (settings.pad ? 180 + 18 : 150 + 18) - 16; availH = H - s.t - s.b - 16; padH = 0; }

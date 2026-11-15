@@ -38,18 +38,17 @@
   function painted(key) { const a = ASSETS[key]; return a && a.img ? a : null; }
 
   /* ---------- themes (one per maze) ---------- */
-  /* Readability first: a flat dark floor, solid walls with one bright edge colour per street,
-   * and nothing decorative inside the play field. The Burlington flavour lives in the frame around it. */
+  /* Readability first: a flat dark floor, and walls drawn as a quiet line drawing: the fill is almost the
+   * floor colour and the edge is a dusty mid-tone (no edge above 50% saturation or 60% lightness).
+   * Only the raccoon, the officers, the creemees and the treat are bright. Nothing decorative inside the
+   * play field; the Burlington flavour lives in the frame around it. */
   const THEMES = [
-    { name: 'Church Street', floor: '#0c0912', wall: '#4d2030', edge: '#ff8a5c', office: '#17122a', sign: '#ff8a5c',
-      brick: ['#5a2a22', '#64302a', '#4f241e', '#6b3a2c'], mortar: '#2a1412', sky: '#120a14' },
-    { name: 'Waterfront', floor: '#070d14', wall: '#12384d', edge: '#52d9ff', office: '#10182a', sign: '#52d9ff',
-      brick: ['#3c3a44', '#45424e', '#34323b', '#4c4752'], mortar: '#1a1920', sky: '#07111c' },
-    { name: 'City Hall Park', floor: '#0a0b08', wall: '#553512', edge: '#ffb43d', office: '#171409', sign: '#ffb43d',
-      brick: ['#5c3424', '#673b29', '#51301f', '#714230'], mortar: '#29160f', sky: '#0b0f12' },
-    { name: 'Battery Street', floor: '#0d0710', wall: '#4a1648', edge: '#ff7ad9', office: '#1c1030', sign: '#ff7ad9',
-      brick: ['#4a2436', '#54293d', '#401f2f', '#5e3044'], mortar: '#21101a', sky: '#140814' },
+    { name: 'Church Street', floor: '#0c0912', wall: '#1a1016', edge: '#c4735c', office: '#17122a', sign: '#c4735c' },
+    { name: 'Waterfront', floor: '#070d14', wall: '#0c1820', edge: '#3f9fb8', office: '#10182a', sign: '#3f9fb8' },
+    { name: 'City Hall Park', floor: '#0a0b08', wall: '#15130c', edge: '#a8905a', office: '#171409', sign: '#a8905a' },
+    { name: 'Battery Street', floor: '#0d0710', wall: '#180e18', edge: '#b0688f', office: '#1c1030', sign: '#b0688f' },
   ];
+  const ICE_EDGE = '#6f9fd0'; // Sugar Rush: every street's walls ease to this
 
   /* ---------- small helpers ---------- */
   function rr(c, x, y, w, h, r) {
@@ -270,11 +269,11 @@
     const st = OFF_STYLE[i], t = o.t || 0, dir = o.dir == null ? 1 : o.dir;
     const face = o.face || (DX[dir] || 1); // +1 faces right, -1 faces left
     const state = o.state || 'normal';
-    const flashOn = state === 'flash' && Math.floor(t * 7) % 2 === 0;
-    const panic = state === 'panic' || (state === 'flash' && !flashOn);
+    const panic = state === 'panic';
     c.save(); c.translate(x, y);
     const s = T * (o.scale || 1.0);
     if (state === 'caught') { drawCaught(c, s, st, t, face); c.restore(); return; }
+    if (panic && !painted('officer_panic')) { drawScared(c, s, st, t, face); c.restore(); return; }
     const key = panic ? 'officer_panic' : 'officer_' + st.key, a = painted(key);
     const bump = Math.abs(Math.sin(t * 18)) * 0.03;
     c.scale(s * face, s); c.translate(0, -bump);
@@ -363,6 +362,32 @@
     }
     c.restore();
   }
+  /* Frightened: the WHOLE sprite (scooter, rider, cap) in one pale ice colour with the dark outline,
+   * a simple scared face, and only a small beacon dot in the officer's own colour. Prey, not threat. */
+  const ICE = '#cfe6ff';
+  function drawScared(c, s, st, t, face) {
+    const INK = '#1a1622', LW = 0.06;
+    c.scale(s * face, s); c.translate(0, -Math.abs(Math.sin(t * 22)) * 0.03);
+    c.lineJoin = 'round'; c.lineCap = 'round'; c.strokeStyle = INK; c.lineWidth = LW;
+    c.fillStyle = 'rgba(0,0,0,.38)'; ell(c, 0, .55, .6, .1); c.fill();
+    const g = c.createLinearGradient(0, -.6, 0, .5); g.addColorStop(0, '#e8f3ff'); g.addColorStop(1, '#b8d6f2');
+    // beacon: the one spot of the officer's own colour
+    c.lineWidth = .04; c.beginPath(); c.moveTo(-.5, .02); c.lineTo(-.5, -.28); c.stroke();
+    ell(c, -.5, -.34, .09, .09); c.fillStyle = st.body; c.fill(); c.stroke();
+    // head + cap
+    c.save(); c.translate(.02, -.28); c.lineWidth = LW;
+    ell(c, 0, 0, .28, .27); c.fillStyle = ICE; c.fill(); c.stroke();
+    c.beginPath(); c.moveTo(-.29, -.06); c.quadraticCurveTo(-.28, -.36, 0, -.37); c.quadraticCurveTo(.28, -.36, .29, -.06); c.closePath(); c.fillStyle = g; c.fill(); c.stroke();
+    c.fillStyle = INK; ell(c, -.06, .01, .04, .05); c.fill(); ell(c, .13, .01, .04, .05); c.fill(); // two dot eyes
+    c.lineWidth = .035; c.beginPath(); c.moveTo(-.1, .15); // wavy, worried mouth
+    for (let k = 1; k <= 6; k++) c.lineTo(-.1 + k * .045, .15 + (k % 2 ? -.035 : 0));
+    c.stroke(); c.restore();
+    // scooter
+    c.lineWidth = LW;
+    rr(c, -.6, -.02, 1.16, .44, .16); c.fillStyle = g; c.fill(); c.stroke();
+    c.beginPath(); c.moveTo(.3, -.02); c.quadraticCurveTo(.46, -.18, .5, -.3); c.lineTo(.56, -.28); c.quadraticCurveTo(.54, -.1, .5, -.02); c.closePath(); c.fillStyle = ICE; c.fill(); c.stroke();
+    for (const wx of [-.36, .34]) { ell(c, wx, .44, .14, .14); c.fillStyle = ICE; c.fill(); c.stroke(); ell(c, wx, .44, .04, .04); c.fillStyle = INK; c.fill(); }
+  }
   function eyes(c, ex, ey, rx, ry) {
     for (const sx of [-.06, .14]) {
       c.fillStyle = '#fff'; ell(c, sx, .0, rx, ry + .01); c.fill();
@@ -420,7 +445,7 @@
     c.fillStyle = th.floor; c.fillRect(0, 0, W, H);
     // parking office pen: a slightly different floor so the gate area reads as "inside"
     c.fillStyle = th.office; c.fillRect(8 * T, 10 * T, 3 * T, 2 * T);
-    const ins = T * 0.2, edgeW = Math.max(1.6, T * 0.085), ov = 0.8;
+    const ins = T * 0.2, edgeW = Math.max(1.3, T * 0.07), ov = 0.8;
     // one path for every wall cell: inset on the sides that face a corridor, rounded convex corners,
     // and a hair of overlap into wall neighbours so merged shapes have no seams
     const wallPath = (cc) => {
@@ -443,7 +468,10 @@
     // white copy of the walls, flashed on a street clear
     const [fl, fc] = mk();
     wallPath(fc); fc.lineWidth = edgeW * 2; fc.strokeStyle = '#fff'; fc.stroke(); fc.fillStyle = '#fff'; fc.fill();
-    return { bg, flash: fl, lightA: null, lightB: null, bulbs: 0, theme: th };
+    // ice-blue wall edges, faded in over the board during a Sugar Rush (just the walls, transparent elsewhere)
+    const [ic, icc] = mk();
+    icc.lineJoin = 'round'; wallPath(icc); icc.lineWidth = edgeW * 2; icc.strokeStyle = ICE_EDGE; icc.stroke(); icc.fillStyle = th.wall; icc.fill();
+    return { bg, flash: fl, ice: ic, theme: th };
   }
   function hexA(hex, a) { const n = parseInt(hex.slice(1), 16); return 'rgba(' + (n >> 16) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')'; }
 
